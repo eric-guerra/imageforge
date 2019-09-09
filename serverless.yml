@@ -1,0 +1,50 @@
+service: imageforge
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  architecture: arm64
+  memorySize: 1536
+  timeout: 15
+  environment:
+    SOURCE_BUCKET: ${self:service}-${sls:stage}-originals
+    DERIVED_BUCKET: ${self:service}-${sls:stage}-derived
+    CDN_BASE: ${param:cdnBase}
+    SIGNING_SECRET: ${ssm:/imageforge/${sls:stage}/signing-secret}
+  apiGateway:
+    binaryMediaTypes: ["*/*"]
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: [s3:GetObject]
+          Resource: arn:aws:s3:::${self:provider.environment.SOURCE_BUCKET}/*
+        - Effect: Allow
+          Action: [s3:GetObject, s3:PutObject]
+          Resource: arn:aws:s3:::${self:provider.environment.DERIVED_BUCKET}/*
+        - Effect: Allow
+          Action: [s3:ListBucket]
+          Resource: arn:aws:s3:::${self:provider.environment.DERIVED_BUCKET}
+
+functions:
+  http:
+    handler: src/index.http
+    events:
+      - http: { path: "img/{key+}", method: get }
+  onUpload:
+    handler: src/index.onUpload
+    events:
+      - s3:
+          bucket: ${self:provider.environment.SOURCE_BUCKET}
+          event: s3:ObjectCreated:*
+          rules: [{ prefix: products/ }]
+
+resources:
+  Resources:
+    DerivedBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.DERIVED_BUCKET}
+        LifecycleConfiguration:
+          Rules: [{ Id: expire-derived, Status: Enabled, ExpirationInDays: 180 }]
